@@ -1,19 +1,22 @@
+maude tool: 'maude'
+ checking version: 3.3.1. OK.
+ checking installation: OK.
+
 ==============================================================================
 summary of summaries:
 
 analyzed: tnic_protocols.spthy
 
-  processing time: 2471.21s
+  output:          tnic_protocols_analyzed.spthy
+  processing time: 175.18s
   
-  sanity (exists-trace): verified (26 steps)
-  HW_key_priv_secret (all-traces): verified (3 steps)
-  S_key_secret (all-traces): verified (97 steps)
-  bitstream_secret (all-traces): verified (83 steps)
-  initialization_attested (all-traces): verified (5540 steps)
-  send_sanity (exists-trace): verified (23 steps)
-  verified_msg_is_auth (all-traces): verified (31795 steps)
+  sanity (exists-trace): verified (20 steps)
+  sensitive_info_stays_secret (all-traces): verified (202 steps)
+  initialization_attested (all-traces): verified (154 steps)
+  send_sanity (exists-trace): verified (63 steps)
+  verified_msg_is_auth (all-traces): verified (92 steps)
   no_lost_messages (all-traces): verified (4 steps)
-  no_message_reordering (all-traces): verified (5447 steps)
-  no_double_messages (all-traces): verified (10850 steps)
+  no_message_reordering (all-traces): verified (307 steps)
+  no_double_messages (all-traces): verified (614 steps)
 
 ==============================================================================

@@ -3,38 +3,35 @@
 import sys
 
 oracles = {
-    "initialization_attested": [ [
-            "!KU( ~",
-            "#c < #s",
-            "priv*inv"
-        ],
-        [
-            "inv"
-        ],
-        ],
     "verified_msg_is_auth": [ 
-        [
-            "!KU( ~",
-            "#c < #s",
-            "priv*inv",
-        ],
-        [
-            "inv"
-        ]   
+        [ "!KU( ~Ctrl_priv", "!KU( ~IPVendor_priv", "!KU( ~HW_key_priv" ],
+        [ "!KU( get_" ],
+        [ "!KU( ~", "!KU( hmac(~" ],
+        [ "'Bitstream'", "'Secrets'" ],
+    ],
+    "send_sanity": [ 
+        [ "!KU( get_" ]
+    ],
+    "no_double_messages": [ 
+        [ "!KU( ~Ctrl_priv", "!KU( ~IPVendor_priv", "!KU( ~HW_key_priv" ],
+        [ "!KU( get_" ],
+        [ "!KU( ~", "!KU( hmac(~" ],
+        [ "'Bitstream'", "'Secrets'" ],
+    ],
+    "no_message_reordering": [ 
+        [ "!KU( ~Ctrl_priv", "!KU( ~IPVendor_priv", "!KU( ~HW_key_priv" ],
+        [ "!KU( get_" ],
+        [ "!KU( ~", "!KU( hmac(~" ],
+        [ "'Bitstream'", "'Secrets'" ],
     ],
     "default": [ 
-        []
+        [ ]
     ]
 }
 neg_oracles = {
-    "initialization_attested": [
-        ".",
-    ],
-    "verified_msg_is_auth": [ 
-        ".",
+    "send_sanity": [ 
     ],
     "default": [ 
-        "!TNIC_Session_fin"
     ]
 }
 

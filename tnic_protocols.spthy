@@ -1,8 +1,8 @@
 /*
  *  Protocol:   T-NIC Protocols
- *  Date:       Jan 2024
+ *  Date:       Aug 2024
  *  Source:     "TNIC: A Trusted NIC Architecture"
- *  Comments:   Run with: tamarin-prover --prove tnic-attestation.spthy
+ *  Comments:   Run with: tamarin-prover --prove tnic_protocols.spthy
  */
 
 theory TNICProtocols
@@ -10,16 +10,97 @@ theory TNICProtocols
 begin
 
 builtins: 
-    hashing,               // adds: h/1 
-    symmetric-encryption,  // adds: senc/2, sdec/2
-    asymmetric-encryption, // adds: aenc/2, adec/2, pk/1
-    diffie-hellman,        // adds: inv/1, 1/0, ^, *
-    signing,               // adds: sign/2, verify/3, pk/1
-    natural-numbers        // adds: %1, %+ 
+    hashing,                 // adds: h/1 
+    symmetric-encryption,    // adds: senc/2, sdec/2
+    asymmetric-encryption,   // adds: aenc/2, adec/2, pk/1
+    signing,                 // adds: sign/2, verify/3, pk/1
+    natural-numbers          // adds: %1, %+ 
 
 functions:
+    embed_certificate/2,     // embeds a certificate into a controller
+    retrieve_certificate/1,  // retrieves an embedded certificate from a controller
+
+    get_session_key/3,       // extracts the session key from the bitstream secrets
     hmac/2,                 
-    get_session_key/3      // extracts the session key
+
+    // models the mTLS handshake with the assumptions outlined in ReadMe.md
+    mTLS_handshake/3,
+    get_mTLS_key_half/3, 
+    get_master_key/2,   
+    get_encryption_key/1
+
+equations:
+    get_mTLS_key_half(mTLS_handshake(n_b, b_priv, pk(a_priv)), a_priv, pk(b_priv)) = n_b,
+    retrieve_certificate(embed_certificate(controller, a_pub)) = a_pub
+
+/************************************/
+/* Datastructure creation           */
+/************************************/
+
+// The hardware manufacturer publishes a new firmware version
+rule publish_firmware:
+    [ 
+        !TNIC_HW($TNIC_ID, HW_key_priv)
+    ]
+    -->
+    [ 
+        Out(senc{'frm', $frm}HW_key_priv)
+    ]
+
+// Creates a new certificate for the IPVendor
+rule create_IPVendor_certificate:
+    [ 
+        Fr(~IPVendor_priv)
+    ]
+    --[
+        NewSensitiveInformation('IPVendorPriv', ~IPVendor_priv)
+    ]->
+    [ 
+        !SensitiveInformation('IPVendorPriv', ~IPVendor_priv),
+        !IP_Vendor_Certificate(~IPVendor_priv),
+        Out(pk(~IPVendor_priv))
+    ]
+
+// Creates a new controller, and embeds a certificate
+rule create_controller:
+    let 
+        CTRL_bin = embed_certificate($CTRL, pub_key)
+    in
+    [ 
+        In(pub_key)
+    ]
+    -->
+    [ 
+        Out(CTRL_bin)
+    ]
+
+// The IP Vendor creates a new bitstream
+rule create_bitstream:
+    [ 
+        Fr(~TNIC_bit)
+    ]
+    --[
+        Bitstream(~TNIC_bit),
+        NewSensitiveInformation('Bitstream', ~TNIC_bit)
+    ]->
+    [ 
+        !SensitiveInformation('Bitstream', ~TNIC_bit),
+        !IP_Vendor_Bitstream(~TNIC_bit)
+    ]
+
+// The IP Vendor creates new secrets
+rule create_secrets:
+    [ 
+        Fr(~secrets)
+    ]
+    --[
+        Secrets(~secrets),
+        NewSensitiveInformation('Secrets', ~secrets)
+    ]->
+    [ 
+        !SensitiveInformation('Secrets', ~secrets),
+        !IP_Vendor_Secrets(~secrets)
+    ]
 
 /************************************/
 /* Bootstrapping of T-NIC device    */
@@ -32,9 +113,11 @@ rule bootstrapping_1:
         Fr(~HW_key_priv)
     ]
     --[ 
-        TNICInit($TNIC_ID, ~HW_key_priv)
+        TNICInit($TNIC_ID, ~HW_key_priv),
+        NewSensitiveInformation('HwKeyPriv', ~HW_key_priv)
     ]->
     [ 
+        !SensitiveInformation('HwKeyPriv', ~HW_key_priv),
         !TNIC_HW($TNIC_ID, ~HW_key_priv),
         !TNIC_PubKey($TNIC_ID, pk(~HW_key_priv))
     ]
@@ -54,27 +137,25 @@ rule bootstrapping_2:
 
 // The Controller is loaded, potentially by an attacker.
 // Generates a fresh certificate for loaded controller and awaits initialization.
+// Beyond this point HW_key_priv is no longer accessable
 rule bootstrapping_3_4_5:
+    let
+        m = <h(CTRL_bin), pk(~Ctrl_priv)>
+        Ctrl_bin_cert = <m, sign{m}HW_key_priv>
+    in
     [   
         !TNIC_HW_B1($TNIC_ID, HW_key_priv, $frm),
-        In($Ctrl_bin),
+        In(CTRL_bin),
         Fr(~Ctrl_priv)
     ]
     --[ 
-        TNICLoadController($TNIC_ID, $Ctrl_bin)
+        TNICLoadController($TNIC_ID, CTRL_bin),
+        NewSensitiveInformation('CtrlPriv', ~Ctrl_priv)
     ]->
     [ 
-        TNIC_HW_B2($TNIC_ID, HW_key_priv, $frm, $Ctrl_bin, ~Ctrl_priv)
-    ]
-
-// The hardware manufacturer publishes a new firmware version
-rule publish_firmware:
-    [ 
-        !TNIC_HW($TNIC_ID, HW_key_priv)
-    ]
-    -->
-    [ 
-        Out(senc{'frm', $frm}HW_key_priv)
+        !SensitiveInformation('CtrlPriv', ~Ctrl_priv),
+        !Ctrl_Certificate(CTRL_bin, ~Ctrl_priv),
+        TNIC_HW_B2($TNIC_ID, $frm, CTRL_bin, ~Ctrl_priv, Ctrl_bin_cert)
     ]
 
 // Publishes the public key of the TNIC hardware
@@ -87,167 +168,147 @@ rule get_tnic_public_key:
         Out(pk(HW_key_priv))
     ]
 
-// Models a general attack that compromises the private key of a TNIC device
-rule compromise_tnic_private_key:
-    [ 
-        !TNIC_HW($TNIC_ID, HW_key_priv)
-    ]
-    --[
-        HWKeyCompromised($TNIC_ID, HW_key_priv)
-    ]->
-    [ 
-        Out(HW_key_priv)
-    ]
-
 /************************************/
 /* Remote Attestation               */
 /************************************/
 
 // IP vendor recieves configuration data from protocol designer.
-// IP vendor starts the establishment of a secure channel using fresh secrets.
-// Assumes that TLS/SSL is a secure communication channel, with freshness guarantees
-rule attestation_6_7:
+// IP vendor requests the controller certificates from the TNIC device.
+rule attestation_1:
     [
-        !IP_Vendor_Bitstream(TNIC_bit),
+        !IP_Vendor_Certificate(IPVendor_priv),
 
-        Fr(~n),
-        Fr(~V_priv)
+        Fr(~n)
     ]
     --[
+        StartUseNonce(~n),
         UseNonce(~n)
     ]->
     [
-        IP_Vendor_Session_1($TNIC_ID, TNIC_bit, ~n, ~V_priv),
-        Out(<~n, 'g'^~V_priv>)
+        IP_Vendor_Session_1($TNIC_ID, IPVendor_priv, ~n),
+        Out(~n)
     ]
 
-// TNIC device also starts the establishment of a secure channel.
-rule attestation_8a:
+// TNIC device reports the certificate.
+rule attestation_2_3:
     let
-        S_key = V_pub ^ Ctrl_priv
+        cert = <n, Ctrl_bin_cert>
     in
     [
-        TNIC_HW_B2($TNIC_ID, HW_key_priv, $frm, $Ctrl_bin, Ctrl_priv),
-        In(<n, V_pub>)
+        TNIC_HW_B2($TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert),
+        In(n)
     ]
     --[
-        _restrict(not(V_pub = DH_neutral)),
-        _restrict(not(V_pub = 'g')),
         UseNonce(n)
     ]->
     [
-        TNIC_Session_1($TNIC_ID, HW_key_priv, $frm, $Ctrl_bin, Ctrl_priv, n, S_key),
-        Out(<senc{'n', n}S_key, 'g'^Ctrl_priv>)
+        TNIC_Session_1($TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n),
+        Out(<cert, sign{cert}Ctrl_priv>)
     ]
 
-// IPVendor finalizes the secure channel establishment before sending the encrypted configuration data
-rule attestation_8b_9:
+// IPVendor reads and verifies the certificates, starts establishing the mTLS connection
+rule attestation_4_5_6a:
     let
-        S_key = Ctrl_pub ^ V_priv
+        CTRL_bin = embed_certificate($CTRL, pk(IPVendor_priv))
+        m = <h(CTRL_bin), Ctrl_pub>
+        Ctrl_bin_cert = <m, m_sig>
+        cert = <n, Ctrl_bin_cert>
+        n_IPVendor_mTLS = hmac(n, n_rand)
     in
     [
-        IP_Vendor_Session_1($TNIC_ID, TNIC_bit, n, V_priv),
-        In(<senc{'n', n}S_key, Ctrl_pub>),
-        Fr(~VE_key)
+        Fr(n_rand),
+        IP_Vendor_Session_1($TNIC_ID, IPVendor_priv, n),
+        !TNIC_PubKey($TNIC_ID, HW_key_pub),
+        In(<cert, cert_sig>)
     ]
     --[
-        _restrict(not(Ctrl_pub = DH_neutral)),
-        _restrict(not(Ctrl_pub = 'g')),
+        _restrict( verify(cert_sig, cert, Ctrl_pub) = true ),
+        _restrict( verify(m_sig, m, HW_key_pub) = true ),
         UseNonce(n)
     ]->
     [
-        IP_Vendor_Session_2($TNIC_ID, TNIC_bit, n, S_key, ~VE_key),
-        Out(senc{'TNIC_bit', TNIC_bit}~VE_key)
+        IP_Vendor_Session_2($TNIC_ID, IPVendor_priv, n, n_IPVendor_mTLS, $CTRL, Ctrl_pub),
+        Out(mTLS_handshake(n_IPVendor_mTLS, IPVendor_priv, Ctrl_pub))
     ]
 
-// TNIC device recieves the configuration data and generates a report, to attest itself
-rule attestation_10_11_12:
+// TNIC device establishes the mTLS connection
+rule attestation_6b:
     let
-        hash = h(TNIC_enc)
-        Ctrl_bin_cert = sign{$Ctrl_bin, pk(Ctrl_priv)}HW_key_priv
-        m = <n, hash, pk(Ctrl_priv), h($Ctrl_bin), Ctrl_bin_cert>
-        s_sig = sign{'S_key', S_key}Ctrl_priv
-        m_sig = sign{'m', m}Ctrl_priv
+        IPVendor_pub = retrieve_certificate(CTRL_bin)
+        n_Ctrl_mTLS = hmac(n, n_rand) 
+        master_secret = get_master_key(get_mTLS_key_half(partial_mTLS, Ctrl_priv, IPVendor_pub), n_Ctrl_mTLS)
     in
     [
-        TNIC_Session_1($TNIC_ID, HW_key_priv, $frm, $Ctrl_bin, Ctrl_priv, n, S_key),
-        In(TNIC_enc)
+        Fr(n_rand),
+        TNIC_Session_1($TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n),
+        In(partial_mTLS)
     ]
     --[
         UseNonce(n)
     ]->
     [
-        TNIC_Session_2($TNIC_ID, HW_key_priv, $frm, $Ctrl_bin, Ctrl_priv, n, S_key, TNIC_enc),
-        Out(<m, m_sig, s_sig>)
+        TNIC_Session_2($TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n, master_secret),
+        Out(mTLS_handshake(n_Ctrl_mTLS, Ctrl_priv, IPVendor_pub))
     ]
 
-// IP Vendor recieves the attestation report of the controller an verifies it's content.
-// Upon successfull attestation the IP Vendor sends the key used to encrypt the configuration data.
-rule attestation_13_14_15_16: 
+// IP Vendor finishes establishing the mTLS connection and sends bitstream & secrets
+rule attestation_6c_7_8:
+    let
+        master_secret = get_master_key(n_IPVendor_mTLS, get_mTLS_key_half(partial_mTLS, IPVendor_priv, Ctrl_pub)) 
+    in 
     [
-        IP_Vendor_Session_2($TNIC_ID, TNIC_bit, n, S_key, VE_key),
-        In(<<n, hash, Ctrl_pub, Ctrl_bin_hash, Ctrl_bin_cert>, m_sig, s_sig>),
-        !TNIC_PubKey($TNIC_ID, HW_key_pub)
+        !IP_Vendor_Bitstream(TNIC_bit),
+        !IP_Vendor_Secrets(secrets),
+        IP_Vendor_Session_2($TNIC_ID, IPVendor_priv, n, n_IPVendor_mTLS, $CTRL, Ctrl_pub),
+        In(partial_mTLS)
     ]
     --[
-        _restrict( hash = h(senc{'TNIC_bit', TNIC_bit}VE_key) ),
-        _restrict( Ctrl_bin_hash = h($Ctrl_bin) ),
-        _restrict( verify(Ctrl_bin_cert, <$Ctrl_bin, Ctrl_pub>, HW_key_pub) = true ),
-        _restrict( verify(m_sig, <'m', <n, hash, Ctrl_pub, Ctrl_bin_hash, Ctrl_bin_cert>>, Ctrl_pub) = true ),
-        _restrict( verify(s_sig, <'S_key', S_key>, Ctrl_pub) = true ),
+        ShareBitstream($TNIC_ID, TNIC_bit),
+        ShareSecrets($TNIC_ID, secrets),
+        UseNonce(n),
+        NewSensitiveInformation('MasterSecret', master_secret)
+    ]->
+    [
+        !SensitiveInformation('MasterSecret', master_secret),
+        IP_Vendor_Session_3($TNIC_ID, IPVendor_priv, n, n_IPVendor_mTLS, $CTRL, Ctrl_pub, master_secret, TNIC_bit, secrets),
+        Out(senc{'Bitstream', TNIC_bit}get_encryption_key(master_secret)),
+        Out(senc{'Secrets', secrets}get_encryption_key(master_secret))
+    ]
 
-        IPVendorShareSecrets($TNIC_ID, TNIC_bit),
-        TrustSkey($TNIC_ID, S_key),
-        SendBitstream($TNIC_ID, TNIC_bit),
+// TNIC device recieves bitstream & secrets
+rule attestation_9:
+    [
+        TNIC_Session_2($TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n, master_secret),
+        In(senc{'Bitstream', TNIC_bit}get_encryption_key(master_secret)),
+        In(senc{'Secrets', secrets}get_encryption_key(master_secret))
+    ]
+    --[
+        CtrlDone($TNIC_ID, TNIC_bit, n, secrets, CTRL_bin),
         UseNonce(n)
     ]->
     [
-        IP_Vendor_Session_3($TNIC_ID, TNIC_bit, n, S_key, VE_key, $Ctrl_bin),
-        Out(senc{'VE_key', VE_key}S_key)
-    ]
-
-// TNIC device recieves the key for configuration data, decrypts it and configures itself before starting operation.
-// TNIC device notifies the IP vendor about the successfull configuration.
-rule attestation_17:
-    [
-        TNIC_Session_2($TNIC_ID, HW_key_priv, $frm, $Ctrl_bin, Ctrl_priv, n, S_key, senc{'TNIC_bit', TNIC_bit}VE_key),
-        In(senc{'VE_key', VE_key}S_key),
-    ]
-    --[
-        TNICLoadBitstream($TNIC_ID, TNIC_bit, $Ctrl_bin),
-        TNICFin($TNIC_ID, TNIC_bit),
-        UseNonce(n)
-    ]->
-    [
-        Out(senc{'done'}S_key),
-        !TNIC_Session_fin($TNIC_ID, TNIC_bit),
+        Out(senc{'done'}get_encryption_key(master_secret)),
+        !TNIC_Session_fin($TNIC_ID, TNIC_bit, secrets)
     ]
 
 // IP Vendor recieves the configuration acknowledgement from the TNIC device and completes the initialization
-rule attestation_18:
+rule attestation_10:
+    let
+        CTRL_bin = embed_certificate($CTRL, pk(IPVendor_priv))
+    in
     [
-        IP_Vendor_Session_3($TNIC_ID, TNIC_bit, n, S_key, VE_key, $Ctrl_bin),
-        In(senc{'done'}S_key)
+        IP_Vendor_Session_3($TNIC_ID, IPVendor_priv, n, n_IPVendor_mTLS, $CTRL, Ctrl_pub, master_secret, TNIC_bit, secrets),
+        In(senc{'done'}get_encryption_key(master_secret))
     ]
     --[
-        IPVendorDone($TNIC_ID, TNIC_bit, $Ctrl_bin),
+        IPVendorDone($TNIC_ID, TNIC_bit, n, secrets, CTRL_bin),
         UseNonce(n)
     ]->
     [
 
     ]
 
-// Models the IP Vendor adding a new bitstream, which potentially contains sensitive information
-rule add_bitstream:
-    [ 
-        Fr(~TNIC_bit)
-    ]
-    --[
-        Bitstream(~TNIC_bit)
-    ]->
-    [ 
-        !IP_Vendor_Bitstream(~TNIC_bit)
-    ]
+
 
 /************************************/
 /* Communication                    */
@@ -256,55 +317,67 @@ rule add_bitstream:
 // Models the TNIC's initialialization of the per session counter values.
 rule init_ctrs:
     [ 
-        !TNIC_Session_fin($TNIC_A, TNIC_bit) 
+        !TNIC_Session_fin($TNIC_A, TNIC_bit, secrets) 
     ]
     --[ 
         _restrict( not( $TNIC_A = $TNIC_B ) ),
-        ConnectionConfigured(TNIC_bit, $TNIC_A, $TNIC_B) 
+        ConnectionConfigured(secrets, $TNIC_A, $TNIC_B) 
     ]->
     [ 
-        TNIC_RecvCounter(TNIC_bit, $TNIC_A, $TNIC_B, %1),
-        TNIC_SendCounter(TNIC_bit, $TNIC_A, $TNIC_B, %1)
+        !TNIC_Connection($TNIC_A, $TNIC_B, secrets),
+        TNIC_RecvCounter(secrets, $TNIC_A, $TNIC_B, %1),
+        TNIC_SendCounter(secrets, $TNIC_A, $TNIC_B, %1)
     ]
 
 // Restrict the counter initialialization to guarantee uniqueness of the session counters.
 restriction one_initialization:
-    "All bits tnic_a tnic_b #i #j. 
+    "All secrets tnic_a tnic_b #i #j. 
         (
-            ConnectionConfigured(bits, tnic_a, tnic_b) @ #i
-            & ConnectionConfigured(bits, tnic_a, tnic_b) @ #j
+            ConnectionConfigured(secrets, tnic_a, tnic_b) @ #i
+            & ConnectionConfigured(secrets, tnic_a, tnic_b) @ #j
         ) ==> #i = #j"
+
+// Only consider IPVendor connections
+restriction only_valid_configurations:
+    "All secrets tnic_a tnic_b #i. 
+        (
+            ConnectionConfigured(secrets, tnic_a, tnic_b) @ #i
+        ) ==> (
+            (Ex #j. Secrets(secrets) @ #j)
+        )
+    "
 
 // Models the sending of an arbitrary message using the TNIC's attestation algorithm as presented in the paper.
 // The message is attested and sent inside the sessions secure channel.
 rule send_msg:
     let
         %cnt = %send_cnt
-        a = hmac(get_session_key(TNIC_bit, $TNIC_SEND, $TNIC_RECV), <~msg, %cnt>)
+        a = hmac(get_session_key(secrets, $TNIC_SEND, $TNIC_RECV), <~msg, %cnt>)
     in
     [ 
         Fr(~msg),
 
-        !TNIC_Session_fin($TNIC_SEND, TNIC_bit),
-        TNIC_SendCounter(TNIC_bit, $TNIC_SEND, $TNIC_RECV, %send_cnt)
+        !TNIC_Connection($TNIC_SEND, $TNIC_RECV, secrets),
+        TNIC_SendCounter(secrets, $TNIC_SEND, $TNIC_RECV, %send_cnt)
     ]
     --[ 
-        TNICSendMsg(TNIC_bit, $TNIC_SEND, $TNIC_RECV, ~msg),
-        TNICSendMsgCtr(TNIC_bit, $TNIC_SEND, $TNIC_RECV, ~msg, %send_cnt),
-        TNICSendCtr(TNIC_bit, $TNIC_SEND, $TNIC_RECV, %send_cnt)
+
+        TNICSendMsg(secrets, $TNIC_SEND, $TNIC_RECV, ~msg),
+        TNICSendMsgCtr(secrets, $TNIC_SEND, $TNIC_RECV, ~msg, %send_cnt),
+        TNICSendCtr(secrets, $TNIC_SEND, $TNIC_RECV, %send_cnt)
     ]->
     [  
-        TNIC_SendCounter(TNIC_bit, $TNIC_SEND, $TNIC_RECV, %send_cnt %+ %1),
+        TNIC_SendCounter(secrets, $TNIC_SEND, $TNIC_RECV, %send_cnt %+ %1),
 
-        Out(senc{a, ~msg, %cnt}get_session_key(TNIC_bit, $TNIC_SEND, $TNIC_RECV))
+        Out(senc{a, ~msg, %cnt}get_session_key(secrets, $TNIC_SEND, $TNIC_RECV))
     ]
 
 // Restrict the message attestation to guarantee the session counters are increased.
 restriction ctr_increasing:
     "
-        All bits tnic1 tnic2 ctr1 ctr2 #i #j.
-            TNICSendCtr(bits, tnic1, tnic2, ctr1) @ #i
-            & TNICSendCtr(bits, tnic1, tnic2, ctr2) @ #j
+        All secrets tnic1 tnic2 ctr1 ctr2 #i #j.
+            TNICSendCtr(secrets, tnic1, tnic2, ctr1) @ #i
+            & TNICSendCtr(secrets, tnic1, tnic2, ctr2) @ #j
             & (#i < #j)
         ==> (Smaller(ctr1, ctr2))
     "
@@ -313,22 +386,38 @@ restriction ctr_increasing:
 // The recieved inside the sessions secure channel and verified before being accepted.
 rule recv_msg:
     let
-        a_prime = hmac(get_session_key(TNIC_bit, $TNIC_SEND, $TNIC_RECV), <msg, %cnt>)
+        a_prime = hmac(get_session_key(secrets, $TNIC_SEND, $TNIC_RECV), <msg, %cnt>)
     in
     [ 
-        In(senc{a, msg, %cnt}get_session_key(TNIC_bit, $TNIC_SEND, $TNIC_RECV)),
+        In(senc{a, msg, %cnt}get_session_key(secrets, $TNIC_SEND, $TNIC_RECV)),
 
-        !TNIC_Session_fin($TNIC_RECV, TNIC_bit),
-        TNIC_RecvCounter(TNIC_bit, $TNIC_RECV, $TNIC_SEND, %recv_cnt)
+        !TNIC_Connection($TNIC_SEND, $TNIC_RECV, secrets),
+        TNIC_RecvCounter(secrets, $TNIC_RECV, $TNIC_SEND, %recv_cnt)
     ]
     --[ 
         _restrict(a_prime = a),
         _restrict(%cnt = %recv_cnt),
 
-        TNICAcceptMsg(TNIC_bit, $TNIC_SEND, $TNIC_RECV, msg)
+        TNICAcceptMsg(secrets, $TNIC_SEND, $TNIC_RECV, msg)
     ]->
     [ 
-        TNIC_RecvCounter(TNIC_bit, $TNIC_RECV, $TNIC_SEND, %recv_cnt %+ %1)
+        TNIC_RecvCounter(secrets, $TNIC_RECV, $TNIC_SEND, %recv_cnt %+ %1)
+    ]
+
+/************************************/
+/* Secret Compromises               */
+/************************************/
+
+// Models a general attack that compromises some sensitive information
+rule compromise_tnic_private_key:
+    [ 
+        !SensitiveInformation(type, information)
+    ]
+    --[
+        Compromised(type, information)
+    ]->
+    [ 
+        Out(information)
     ]
 
 /************************************/
@@ -351,67 +440,41 @@ exists-trace
         ==> (n1 = n2)
     ) &
     /* Actual Lemma */
-    not (Ex tnic hw_key #i. HWKeyCompromised(tnic, hw_key) @ #i)
-    & Ex tnic bits ctrl #i #j. 
-        TNICLoadBitstream(tnic, bits, ctrl) @ #i
-        & IPVendorDone(tnic, bits, ctrl) @ #j
+    not (Ex type info #i. Compromised(type, info) @ #i)
+    & Ex tnic bits n secrets ctrl #i #j. 
+        CtrlDone(tnic, bits, n, secrets, ctrl) @ #i
+        & IPVendorDone(tnic, bits, n, secrets, ctrl) @ #j
 "
 
 /*
-This lemma ensures that the private key of the TNIC device is not obtainable from any messages sent as part of
-the TNIC protocols of the model. 
+This lemma ensures that the attacker is unable to obtain sensitive information from the protocol
 */
-lemma HW_key_priv_secret:
+lemma sensitive_info_stays_secret [reuse]:
 "
-    not (Ex tnic hw_key #i. HWKeyCompromised(tnic, hw_key) @ #i)
-    ==> 
-    not (
-        Ex tnic HW_key_priv #i #j. 
-            TNICInit(tnic, HW_key_priv) @ #i
-            & K(HW_key_priv) @ #j
-    )
-"
-
-/*
-This lemma ensures that all S_keys established during initialization phases are secret assuming they are established
-between the IP Vendor and an uncompromised tnic device. 
-It also ensures past S_keys stay secret even if the hardware key is compromized in the future after the session is
-completed.
-*/
-lemma S_key_secret:
-"
-    All tnic skey #i. 
-        TrustSkey(tnic, skey) @ #i
-        ==> 
+    All type info #i #k.
         (
-            not ( Ex #j. K(skey) @ #j )
-            |
-            (Ex hw_key #c. (#c < #i) & HWKeyCompromised(tnic, hw_key) @ #c)
+            NewSensitiveInformation(type, info) @ #i
+            & K(info) @ #k
         )
-"
-
-/*
-This lemma ensures that all bitstreams of the IP Vendor are secret assuming they are only shared
-between the IP Vendor and uncompromized tnic devices. 
-It also ensures past bitstreams stay secret even if the hardware key is compromized in the future 
-after the bitstream was shared.
-*/
-lemma bitstream_secret[reuse]:
-"
-    All bits #i. 
-        Bitstream(bits) @ #i
-        ==> 
+        ==>
         (
-            not ( Ex #j. K(bits) @ #j )
+            (Ex #c. (#c < #k) & Compromised(type, info) @ #c)
             |
             (
-                Ex tnic hw_key #c #s. 
-                    (#c < #s) 
-                    & HWKeyCompromised(tnic, hw_key) @ #c
-                    & SendBitstream(tnic, bits) @ #s
+                (
+                    type = 'Bitstream'
+                    | type = 'Secrets'
+                    | type = 'MasterSecret'
+                )
+                & 
+                ( 
+                    (Ex x #c. (#c < #k) & Compromised('IPVendorPriv', x) @ #c)
+                    | (Ex x #c. (#c < #k) & Compromised('CtrlPriv', x) @ #c)
+                    | (Ex x #c. (#c < #k) & Compromised('HwKeyPriv', x) @ #c)
+                    | (Ex x #c. (#c < #k) & Compromised('MasterSecret', x) @ #c)
+                )
             )
         )
-        
 "
 
 /*
@@ -419,19 +482,20 @@ This lemma ensures that after the IP Vendor finished the attestation during the 
 the TNIC device is in an expected state and loaded the correct configuration, assuming the tnic device
 was not compromized prior to the initialization.
 */
-lemma initialization_attested[heuristic=O "./tnic_oracle.py"]:
+lemma initialization_attested:
 "
-    All tnic bits ctrl #i. 
-        IPVendorDone(tnic, bits, ctrl) @ #i
+    All tnic bits n secrets ctrl #i. 
+        IPVendorDone(tnic, bits, n, secrets, ctrl) @ #i
         ==> 
         (
-            (
-                Ex #j.
-                    TNICLoadBitstream(tnic, bits, ctrl) @ #j
-                    & #j < #i
-            )
+            ( Ex #j. (#j < #i) & CtrlDone(tnic, bits, n, secrets, ctrl) @ #j )
             |
-            ( Ex hw_key #c. (#c < #i) & HWKeyCompromised(tnic, hw_key) @ #c)
+            ( 
+                (Ex x #c. (#c < #i) & Compromised('IPVendorPriv', x) @ #c)
+                | (Ex x #c. (#c < #i) & Compromised('CtrlPriv', x) @ #c)
+                | (Ex x #c. (#c < #i) & Compromised('HwKeyPriv', x) @ #c)
+                | (Ex x #c. (#c < #i) & Compromised('MasterSecret', x) @ #c)
+            )
         )
 "
 
@@ -439,25 +503,66 @@ lemma initialization_attested[heuristic=O "./tnic_oracle.py"]:
 This control lemma ensures that the protocol allows for successfully verifying a message send during the
 communication phase, after two TNIC devices are successfully initialized.
 */
-lemma send_sanity:
+lemma send_sanity[heuristic=O "./tnic_oracle.py"]:
 exists-trace
 "
     /* Restrictions that help to narrow down search */
-    ( Ex tnic1 tnic2 bits1 #j #l.
-        TNICFin(tnic1, bits1) @ #j
-        & TNICFin(tnic2, bits1) @ #l 
+    ( Ex tnic1 ctrl1 tnic2 ctrl2 bits secrets n1 n2 #a #b #j #l #m #n #o #p #q #r.
+        TNICLoadController(tnic1, ctrl1) @ #a
+        & TNICLoadController(tnic2, ctrl2) @ #b
+        & CtrlDone(tnic1, bits, n1, secrets, ctrl1) @ #j
+        & CtrlDone(tnic2, bits, n2, secrets, ctrl2) @ #l
+        & StartUseNonce(n1) @ #m
+        & StartUseNonce(n2) @ #n
+        & ConnectionConfigured(secrets, tnic1, tnic2) @ #o 
+        & ConnectionConfigured(secrets, tnic2, tnic1) @ #p
+        & IPVendorDone(tnic1, bits, n1, secrets, ctrl1) @ #q
+        & IPVendorDone(tnic2, bits, n2, secrets, ctrl2) @ #r
         & (
-            All tnic bits #i.
-                TNICFin(tnic, bits) @ #i
+            All type x y #x #y.
+                ( 
+                    ( 
+                        type = 'IPVendorPriv'
+                        | type = 'Bitstream'
+                        | type = 'Secrets'
+                    )
+                    & NewSensitiveInformation(type, x) @ #x
+                    & NewSensitiveInformation(type, y) @ #y
+                ) ==> ( #x = #y )
+        )
+        & (
+            All secretsX tnic1X tnic2X #i.
+                ConnectionConfigured(secretsX, tnic1X, tnic2X) @ #i
+            ==> (
+                #i = #o | #i = #p
+            )
+        )
+        & (
+            All tnicX ctrlX #i.
+                TNICLoadController(tnicX, ctrlX) @ #i
+            ==> (
+                #i = #a | #i = #b
+            )
+        )
+        & (
+            All tnicX ctrlX bitsX nX secretsX #i.
+                CtrlDone(tnicX, bitsX, nX, secretsX, ctrlX) @ #i
             ==> (
                 #i = #j | #i = #l
             )
         )
+        & (
+            All n #i.
+                UseNonce(n) @ #i
+            ==> (
+                n = n1 | n = n2
+            )
+        )
     ) &
     /* Actual Lemma */
-    not (Ex tnic hw_key #i. HWKeyCompromised(tnic, hw_key) @ #i)
-    & Ex bits tnic_a tnic_b msg #i. 
-        TNICAcceptMsg(bits, tnic_a, tnic_b, msg) @ #i
+    not (Ex type info #i. Compromised(type, info) @ #i)
+    & Ex secrets tnic_a tnic_b msg #i. 
+        TNICAcceptMsg(secrets, tnic_a, tnic_b, msg) @ #i
 "
 
 /*
@@ -467,16 +572,15 @@ the hardware of the TNIC devices was not compromised.
 */
 lemma verified_msg_is_auth[heuristic=O "./tnic_oracle.py"]:
 "
-    ( not (Ex tnic hw_key #i. HWKeyCompromised(tnic, hw_key) @ #i) )
+    ( not (Ex type info #i. Compromised(type, info) @ #i) )
     ==> (
-        All bits tnic_a tnic_b msg #i #j.
-            Bitstream(bits) @ #i
-            & TNICAcceptMsg(bits, tnic_a, tnic_b, msg) @ #j
+        All secrets tnic_a tnic_b msg #j.
+            TNICAcceptMsg(secrets, tnic_a, tnic_b, msg) @ #j
         ==> 
         (
             Ex #k #l. 
-                IPVendorShareSecrets(tnic_a, bits) @ #k
-                & TNICSendMsg(bits, tnic_a, tnic_b, msg) @ #l
+                ShareSecrets(tnic_a, secrets) @ #k
+                & TNICSendMsg(secrets, tnic_a, tnic_b, msg) @ #l
                 & (#k < #l)
                 & (#l < #j)
         )
@@ -490,24 +594,24 @@ no messages that were sent before but not accepted by the same TNIC device.
 */
 lemma no_lost_messages:
 "
-    ( not (Ex tnic hw_key #i. HWKeyCompromised(tnic, hw_key) @ #i) )
+    ( not (Ex type info #i. Compromised(type, info) @ #i) )
     ==> ( 
-        All bits tnic_a tnic_b msg ctr #i #j.
+        All secrets tnic_a tnic_b msg ctr #i #j.
         (
-            TNICAcceptMsg(bits, tnic_a, tnic_b, msg) @ #i
-            & TNICSendMsgCtr(bits, tnic_a, tnic_b, msg, ctr) @ #j
+            TNICAcceptMsg(secrets, tnic_a, tnic_b, msg) @ #i
+            & TNICSendMsgCtr(secrets, tnic_a, tnic_b, msg, ctr) @ #j
         )
         ==>
         (
             All msg2 ctr2 #k.
             (
                 Smaller(ctr2, ctr)
-                & TNICSendMsgCtr(bits, tnic_a, tnic_b, msg2, ctr2) @ #k
+                & TNICSendMsgCtr(secrets, tnic_a, tnic_b, msg2, ctr2) @ #k
             )
             ==>
             (
                 Ex #l.
-                    TNICAcceptMsg(bits, tnic_a, tnic_b, msg) @ #l
+                    TNICAcceptMsg(secrets, tnic_a, tnic_b, msg) @ #l
                     & (#l < #i)
             )
         )
@@ -521,20 +625,19 @@ no messages that were sent after that message but accepted before.
 */
 lemma no_message_reordering[heuristic=O "./tnic_oracle.py"]:
 "
-    ( not (Ex tnic hw_key #i. HWKeyCompromised(tnic, hw_key) @ #i) )
+    ( not (Ex type info #i. Compromised(type, info) @ #i) )
     ==> ( 
-        All bits tnic_a tnic_b msg1 msg2 #i #j #t.
+        All secrets tnic_a tnic_b msg1 msg2 #i #j.
         ( 
-            Bitstream(bits) @ #t
-            & TNICAcceptMsg(bits, tnic_a, tnic_b, msg1) @ #i
-            & TNICAcceptMsg(bits, tnic_a, tnic_b, msg2) @ #j
+            TNICAcceptMsg(secrets, tnic_a, tnic_b, msg1) @ #i
+            & TNICAcceptMsg(secrets, tnic_a, tnic_b, msg2) @ #j
             & (#i < #j)
         )
         ==>
         (
             Ex #k #l.
-                TNICSendMsg(bits, tnic_a, tnic_b, msg1) @ #k
-                & TNICSendMsg(bits, tnic_a, tnic_b, msg2) @ #l
+                TNICSendMsg(secrets, tnic_a, tnic_b, msg1) @ #k
+                & TNICSendMsg(secrets, tnic_a, tnic_b, msg2) @ #l
                 & (#k < #l)
         )
     )
@@ -546,13 +649,12 @@ that a genuine TNIC device does not accept the same message multiple times.
 */
 lemma no_double_messages[heuristic=O "./tnic_oracle.py"]:
 "
-    ( not (Ex tnic hw_key #i. HWKeyCompromised(tnic, hw_key) @ #i) )
+    ( not (Ex type info #i. Compromised(type, info) @ #i) )
     ==> ( 
-        All bits tnic_a tnic_b msg #i #j #t.
+        All secrets tnic_a tnic_b msg #i #j.
         ( 
-            Bitstream(bits) @ #t
-            & TNICAcceptMsg(bits, tnic_a, tnic_b, msg) @ #i
-            & TNICAcceptMsg(bits, tnic_a, tnic_b, msg) @ #j
+            TNICAcceptMsg(secrets, tnic_a, tnic_b, msg) @ #i
+            & TNICAcceptMsg(secrets, tnic_a, tnic_b, msg) @ #j
         )
         ==> (#i = #j)
     )
