@@ -244,7 +244,9 @@ rule attestation_6b:
         In(partial_mTLS)
     ]
     --[
-        UseNonce(n)
+        UseNonce(n),
+        EnsureFreshInformation('CtrlPartialmTLS', <n_Ctrl_mTLS, partial_mTLS>),
+        EnsureFreshInformation('CtrlMasterSecret', master_secret)
     ]->
     [
         TNIC_Session_2($TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n, master_secret),
@@ -266,7 +268,9 @@ rule attestation_6c_7_8:
         ShareBitstream($TNIC_ID, TNIC_bit),
         ShareSecrets($TNIC_ID, secrets),
         UseNonce(n),
-        NewSensitiveInformation('MasterSecret', master_secret)
+        NewSensitiveInformation('MasterSecret', master_secret),
+        EnsureFreshInformation('IPVendorPartialmTLS', <n_IPVendor_mTLS, partial_mTLS>),
+        EnsureFreshInformation('IPVendorMasterSecret', master_secret)
     ]->
     [
         !SensitiveInformation('MasterSecret', master_secret),
@@ -473,6 +477,28 @@ lemma sensitive_info_stays_secret [reuse]:
                     | (Ex x #c. (#c < #k) & Compromised('HwKeyPriv', x) @ #c)
                     | (Ex x #c. (#c < #k) & Compromised('MasterSecret', x) @ #c)
                 )
+            )
+        )
+"
+
+/*
+Ensures that freshness guarantees are upheld, i.e. there is no prior point in time where the same information + type was also used
+*/
+lemma fresh_info_is_not_reused:
+"
+    All type info #i.
+        (
+            EnsureFreshInformation(type, info) @ #i
+        )
+        ==>
+        (   
+            ( All #c. (EnsureFreshInformation(type, info) @ #c) ==> (#c = #i) )
+            |
+            (
+                (Ex x #c. Compromised('IPVendorPriv', x) @ #c)
+                | (Ex x #c. Compromised('CtrlPriv', x) @ #c)
+                | (Ex x #c. Compromised('HwKeyPriv', x) @ #c)
+                | (Ex x #c. Compromised('MasterSecret', x) @ #c)
             )
         )
 "

@@ -8,10 +8,11 @@ summary of summaries:
 analyzed: tnic_protocols.spthy
 
   output:          tnic_protocols_analyzed.spthy
-  processing time: 175.18s
+  processing time: 196.10s
   
   sanity (exists-trace): verified (20 steps)
   sensitive_info_stays_secret (all-traces): verified (202 steps)
+  fresh_info_is_not_reused (all-traces): verified (48 steps)
   initialization_attested (all-traces): verified (154 steps)
   send_sanity (exists-trace): verified (63 steps)
   verified_msg_is_auth (all-traces): verified (92 steps)

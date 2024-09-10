@@ -1,7 +1,7 @@
 # T-NIC Protocol Verification
 
 This repository contains a Tamarin model and lemmas for the protocols employed by the T-NIC architecture.
-For installation of the Tamarin prover refer to the [Tamarin documentation](https://tamarin-prover.com/manual/master/book/002_installation.html).
+For installation of the Tamarin prover (version 1.8.0) refer to the [Tamarin documentation](https://tamarin-prover.com/manual/master/book/002_installation.html).
 
 The model and lemmas are specified in `tnic_protocols.spthy`, the model is generated with respect to the
 protocols explained in Section 4.3 of the paper as well as the functions defined in Algorithm 1.

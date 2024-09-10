@@ -275,7 +275,17 @@ rule (modulo E) attestation_6b:
    TNIC_Session_1( $TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n ),
    In( partial_mTLS )
    ]
-  --[ UseNonce( n ) ]->
+  --[
+  UseNonce( n ),
+  EnsureFreshInformation( 'CtrlPartialmTLS',
+                          <hmac(n, n_rand), partial_mTLS>
+  ),
+  EnsureFreshInformation( 'CtrlMasterSecret',
+                          get_master_key(get_mTLS_key_half(partial_mTLS, Ctrl_priv,
+                                                           retrieve_certificate(CTRL_bin)),
+                                         hmac(n, n_rand))
+  )
+  ]->
    [
    TNIC_Session_2( $TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n,
                    get_master_key(get_mTLS_key_half(partial_mTLS, Ctrl_priv,
@@ -294,7 +304,15 @@ rule (modulo E) attestation_6b:
      TNIC_Session_1( $TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n ),
      In( partial_mTLS )
      ]
-    --[ UseNonce( n ) ]->
+    --[
+    UseNonce( n ),
+    EnsureFreshInformation( 'CtrlPartialmTLS',
+                            <hmac(n, n_rand), partial_mTLS>
+    ),
+    EnsureFreshInformation( 'CtrlMasterSecret',
+                            get_master_key(z, hmac(n, n_rand))
+    )
+    ]->
      [
      TNIC_Session_2( $TNIC_ID, $frm, CTRL_bin, Ctrl_priv, Ctrl_bin_cert, n,
                      get_master_key(z, hmac(n, n_rand))
@@ -303,32 +321,32 @@ rule (modulo E) attestation_6b:
      ]
     variants (modulo AC)
     1. CTRL_bin
-             = CTRL_bin.11
+             = CTRL_bin.17
        Ctrl_priv
-             = Ctrl_priv.11
+             = Ctrl_priv.19
        partial_mTLS
-             = partial_mTLS.11
-       z     = get_mTLS_key_half(partial_mTLS.11, Ctrl_priv.11,
-                                 retrieve_certificate(CTRL_bin.11))
-       z.1   = retrieve_certificate(CTRL_bin.11)
+             = partial_mTLS.22
+       z     = get_mTLS_key_half(partial_mTLS.22, Ctrl_priv.19,
+                                 retrieve_certificate(CTRL_bin.17))
+       z.1   = retrieve_certificate(CTRL_bin.17)
     
     2. CTRL_bin
-             = embed_certificate(x.11, x.12)
+             = embed_certificate(x.34, z.25)
        Ctrl_priv
-             = Ctrl_priv.13
+             = Ctrl_priv.20
        partial_mTLS
-             = partial_mTLS.13
-       z     = get_mTLS_key_half(partial_mTLS.13, Ctrl_priv.13, x.12)
-       z.1   = x.12
+             = partial_mTLS.23
+       z     = get_mTLS_key_half(partial_mTLS.23, Ctrl_priv.20, z.25)
+       z.1   = z.25
     
     3. CTRL_bin
-             = embed_certificate(x.11, pk(x.12))
+             = embed_certificate(x.35, pk(x.36))
        Ctrl_priv
-             = x.14
+             = Ctrl_priv.21
        partial_mTLS
-             = mTLS_handshake(x.17, x.12, pk(x.14))
-       z     = x.17
-       z.1   = pk(x.12)
+             = mTLS_handshake(z.25, x.36, pk(Ctrl_priv.21))
+       z     = z.25
+       z.1   = pk(x.36)
   */
 
 rule (modulo E) attestation_6c_7_8:
@@ -345,6 +363,13 @@ rule (modulo E) attestation_6c_7_8:
   NewSensitiveInformation( 'MasterSecret',
                            get_master_key(n_IPVendor_mTLS,
                                           get_mTLS_key_half(partial_mTLS, IPVendor_priv, Ctrl_pub))
+  ),
+  EnsureFreshInformation( 'IPVendorPartialmTLS',
+                          <n_IPVendor_mTLS, partial_mTLS>
+  ),
+  EnsureFreshInformation( 'IPVendorMasterSecret',
+                          get_master_key(n_IPVendor_mTLS,
+                                         get_mTLS_key_half(partial_mTLS, IPVendor_priv, Ctrl_pub))
   )
   ]->
    [
@@ -382,6 +407,12 @@ rule (modulo E) attestation_6c_7_8:
     UseNonce( n ),
     NewSensitiveInformation( 'MasterSecret',
                              get_master_key(n_IPVendor_mTLS, z)
+    ),
+    EnsureFreshInformation( 'IPVendorPartialmTLS',
+                            <n_IPVendor_mTLS, partial_mTLS>
+    ),
+    EnsureFreshInformation( 'IPVendorMasterSecret',
+                            get_master_key(n_IPVendor_mTLS, z)
     )
     ]->
      [
@@ -407,12 +438,12 @@ rule (modulo E) attestation_6c_7_8:
        z     = get_mTLS_key_half(partial_mTLS.23, IPVendor_priv.19, Ctrl_pub.18)
     
     2. Ctrl_pub
-             = pk(x.61)
+             = pk(x.117)
        IPVendor_priv
-             = IPVendor_priv.33
+             = IPVendor_priv.61
        partial_mTLS
-             = mTLS_handshake(z.40, x.61, pk(IPVendor_priv.33))
-       z     = z.40
+             = mTLS_handshake(z.68, x.117, pk(IPVendor_priv.61))
+       z     = z.68
   */
 
 rule (modulo E) attestation_9:
@@ -1341,6 +1372,207 @@ next
     next
       case compromise_tnic_private_key
       by contradiction /* from formulas */
+    qed
+  qed
+qed
+
+lemma fresh_info_is_not_reused:
+  all-traces
+  "∀ type info #i.
+    (EnsureFreshInformation( type, info ) @ #i) ⇒
+    ((∀ #c. (EnsureFreshInformation( type, info ) @ #c) ⇒ (#c = #i)) ∨
+     ((((∃ x #c. Compromised( 'IPVendorPriv', x ) @ #c) ∨
+        (∃ x #c. Compromised( 'CtrlPriv', x ) @ #c)) ∨
+       (∃ x #c. Compromised( 'HwKeyPriv', x ) @ #c)) ∨
+      (∃ x #c. Compromised( 'MasterSecret', x ) @ #c)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ type info #i.
+  (EnsureFreshInformation( type, info ) @ #i)
+ ∧
+  (∃ #c. (EnsureFreshInformation( type, info ) @ #c) ∧ ¬(#c = #i)) ∧
+  (∀ x #c. (Compromised( 'IPVendorPriv', x ) @ #c) ⇒ ⊥) ∧
+  (∀ x #c. (Compromised( 'CtrlPriv', x ) @ #c) ⇒ ⊥) ∧
+  (∀ x #c. (Compromised( 'HwKeyPriv', x ) @ #c) ⇒ ⊥) ∧
+  (∀ x #c. (Compromised( 'MasterSecret', x ) @ #c) ⇒ ⊥)"
+*/
+simplify
+solve( (#c < #i)  ∥ (#i < #c) )
+  case case_1
+  solve( EnsureFreshInformation( type, info ) @ #i )
+    case attestation_6b_case_1
+    solve( TNIC_Session_1( $TNIC_ID, $frm, CTRL_bin, Ctrl_priv,
+                           Ctrl_bin_cert, n.1
+           ) ▶₁ #i )
+      case attestation_2_3
+      solve( EnsureFreshInformation( 'CtrlPartialmTLS',
+                                     <hmac(n.1, ~n), partial_mTLS>
+             ) @ #c )
+        case attestation_6b
+        by contradiction /* cyclic */
+      qed
+    qed
+  next
+    case attestation_6b_case_2
+    solve( TNIC_Session_1( $TNIC_ID, $frm, CTRL_bin, Ctrl_priv,
+                           Ctrl_bin_cert, n.1
+           ) ▶₁ #i )
+      case attestation_2_3
+      solve( EnsureFreshInformation( 'CtrlMasterSecret',
+                                     get_master_key(z, hmac(n.1, ~n))
+             ) @ #c )
+        case attestation_6b
+        by contradiction /* cyclic */
+      qed
+    qed
+  next
+    case attestation_6c_7_8_case_1
+    solve( !IP_Vendor_Bitstream( TNIC_bit ) ▶₀ #i )
+      case create_bitstream
+      solve( !IP_Vendor_Secrets( secrets ) ▶₁ #i )
+        case create_secrets
+        solve( IP_Vendor_Session_2( $TNIC_ID, IPVendor_priv, n, n_IPVendor_mTLS,
+                                    $CTRL, Ctrl_pub
+               ) ▶₂ #i )
+          case attestation_4_5_6a
+          solve( EnsureFreshInformation( 'IPVendorPartialmTLS',
+                                         <hmac(~n, ~n.1), partial_mTLS>
+                 ) @ #c )
+            case attestation_6c_7_8
+            solve( !IP_Vendor_Bitstream( TNIC_bit ) ▶₀ #c )
+              case create_bitstream
+              solve( !IP_Vendor_Secrets( secrets ) ▶₁ #c )
+                case create_secrets
+                solve( IP_Vendor_Session_2( $TNIC_ID, IPVendor_priv, n, hmac(~n.1, ~n.2),
+                                            $CTRL, Ctrl_pub
+                       ) ▶₂ #c )
+                  case attestation_4_5_6a
+                  by contradiction /* cyclic */
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  next
+    case attestation_6c_7_8_case_2
+    solve( !IP_Vendor_Bitstream( TNIC_bit ) ▶₀ #i )
+      case create_bitstream
+      solve( !IP_Vendor_Secrets( secrets ) ▶₁ #i )
+        case create_secrets
+        solve( IP_Vendor_Session_2( $TNIC_ID, IPVendor_priv, n, n_IPVendor_mTLS,
+                                    $CTRL, Ctrl_pub
+               ) ▶₂ #i )
+          case attestation_4_5_6a
+          solve( EnsureFreshInformation( 'IPVendorMasterSecret',
+                                         get_master_key(hmac(~n, ~n.1), z)
+                 ) @ #c )
+            case attestation_6c_7_8
+            solve( !IP_Vendor_Bitstream( TNIC_bit ) ▶₀ #c )
+              case create_bitstream
+              solve( !IP_Vendor_Secrets( secrets ) ▶₁ #c )
+                case create_secrets
+                solve( IP_Vendor_Session_2( $TNIC_ID, IPVendor_priv, n, hmac(~n.1, ~n.2),
+                                            $CTRL, Ctrl_pub
+                       ) ▶₂ #c )
+                  case attestation_4_5_6a
+                  by contradiction /* cyclic */
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case case_2
+  solve( EnsureFreshInformation( type, info ) @ #i )
+    case attestation_6b_case_1
+    solve( TNIC_Session_1( $TNIC_ID, $frm, CTRL_bin, Ctrl_priv,
+                           Ctrl_bin_cert, n.1
+           ) ▶₁ #i )
+      case attestation_2_3
+      solve( EnsureFreshInformation( 'CtrlPartialmTLS',
+                                     <hmac(n.1, ~n), partial_mTLS>
+             ) @ #c )
+        case attestation_6b
+        by contradiction /* cyclic */
+      qed
+    qed
+  next
+    case attestation_6b_case_2
+    solve( TNIC_Session_1( $TNIC_ID, $frm, CTRL_bin, Ctrl_priv,
+                           Ctrl_bin_cert, n.1
+           ) ▶₁ #i )
+      case attestation_2_3
+      solve( EnsureFreshInformation( 'CtrlMasterSecret',
+                                     get_master_key(z, hmac(n.1, ~n))
+             ) @ #c )
+        case attestation_6b
+        by contradiction /* cyclic */
+      qed
+    qed
+  next
+    case attestation_6c_7_8_case_1
+    solve( !IP_Vendor_Bitstream( TNIC_bit ) ▶₀ #i )
+      case create_bitstream
+      solve( !IP_Vendor_Secrets( secrets ) ▶₁ #i )
+        case create_secrets
+        solve( IP_Vendor_Session_2( $TNIC_ID, IPVendor_priv, n, n_IPVendor_mTLS,
+                                    $CTRL, Ctrl_pub
+               ) ▶₂ #i )
+          case attestation_4_5_6a
+          solve( EnsureFreshInformation( 'IPVendorPartialmTLS',
+                                         <hmac(~n, ~n.1), partial_mTLS>
+                 ) @ #c )
+            case attestation_6c_7_8
+            solve( !IP_Vendor_Bitstream( TNIC_bit ) ▶₀ #c )
+              case create_bitstream
+              solve( !IP_Vendor_Secrets( secrets ) ▶₁ #c )
+                case create_secrets
+                solve( IP_Vendor_Session_2( $TNIC_ID, IPVendor_priv, n, hmac(~n.1, ~n.2),
+                                            $CTRL, Ctrl_pub
+                       ) ▶₂ #c )
+                  case attestation_4_5_6a
+                  by contradiction /* cyclic */
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  next
+    case attestation_6c_7_8_case_2
+    solve( !IP_Vendor_Bitstream( TNIC_bit ) ▶₀ #i )
+      case create_bitstream
+      solve( !IP_Vendor_Secrets( secrets ) ▶₁ #i )
+        case create_secrets
+        solve( IP_Vendor_Session_2( $TNIC_ID, IPVendor_priv, n, n_IPVendor_mTLS,
+                                    $CTRL, Ctrl_pub
+               ) ▶₂ #i )
+          case attestation_4_5_6a
+          solve( EnsureFreshInformation( 'IPVendorMasterSecret',
+                                         get_master_key(hmac(~n, ~n.1), z)
+                 ) @ #c )
+            case attestation_6c_7_8
+            solve( !IP_Vendor_Bitstream( TNIC_bit ) ▶₀ #c )
+              case create_bitstream
+              solve( !IP_Vendor_Secrets( secrets ) ▶₁ #c )
+                case create_secrets
+                solve( IP_Vendor_Session_2( $TNIC_ID, IPVendor_priv, n, hmac(~n.1, ~n.2),
+                                            $CTRL, Ctrl_pub
+                       ) ▶₂ #c )
+                  case attestation_4_5_6a
+                  by contradiction /* cyclic */
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
     qed
   qed
 qed
@@ -6051,7 +6283,7 @@ Generated from:
 Tamarin version 1.8.0
 Maude version 3.3.1
 Git revision: UNKNOWN, branch: UNKNOWN
-Compiled at: 2024-08-05 06:05:44.714603595 UTC
+Compiled at: 2024-08-18 15:59:38.606680173 UTC
 */
 
 end
